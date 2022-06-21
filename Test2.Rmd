@@ -1,0 +1,83 @@
+---
+title: "Test2"
+output:
+  html_document:
+    df_print: paged
+---
+
+Считываем данные:
+```{r}
+dataPath <- './'
+test_data <- read.table(paste(dataPath,'Stocks.csv',sep = '/'), header=TRUE,sep=',')
+```
+Перейдём к логарифмическим доходностям:
+```{r}
+lukoil <- as.numeric(test_data$LukoilClose)
+n <- length(lukoil)
+rate.lukoil <- lukoil[2:n]/lukoil[1:(n-1)]
+rate.lukoil <-log(rate.lukoil)
+
+sp500 <- as.numeric(test_data$SPClose)
+rate.sp500 <- sp500[2:n]/sp500[1:(n-1)]
+rate.sp500 <-log(rate.sp500)
+
+brent <- as.numeric(test_data$BrentClose)
+rate.brent <- brent[2:n]/brent[1:(n-1)]
+rate.brent <-log(rate.brent)
+
+cuprum <- as.numeric(test_data$CuprumClose)
+rate.cuprum <- cuprum[2:n]/cuprum[1:(n-1)]
+rate.cuprum <-log(rate.cuprum)
+
+eurusd <- as.numeric(test_data$EurUSDClose)
+rate.eurusd <- eurusd[2:n]/eurusd[1:(n-1)]
+rate.eurusd <-log(rate.eurusd)
+
+gas <- as.numeric(test_data$GasClose)
+rate.gas <- gas[2:n]/gas[1:(n-1)]
+rate.gas <-log(rate.gas)
+
+gold <- as.numeric(test_data$GoldClose)
+rate.gold <- gold[2:n]/gold[1:(n-1)]
+rate.gold <-log(rate.gold)
+
+usdrub <- as.numeric(test_data$USDRubClose)
+rate.usdrub <- usdrub[2:n]/usdrub[1:(n-1)]
+rate.usdrub <-log(rate.usdrub)
+```
+
+Построим регрессию:
+```{r}
+regr <-  lm(rate.lukoil ~ rate.brent + rate.cuprum + rate.eurusd + rate.gas + rate.gold + rate.sp500 + rate.usdrub)
+summary(regr)
+```
+Из-за особо малого значения p-value, соответствующего полученному значению F-статистики, можно сделать вывод, что полученная модель является невырожденной. Значимые предикторы помечены звёздочками. Следовательно, значимыми являются доходности нефти Brent, евро к доллару и доллара к рублю. Построим модель линейной регрессии на основе этих признаков и без константы:
+```{r}
+regr <-  lm(rate.lukoil ~ rate.brent + rate.eurusd + rate.usdrub - 1)
+summary(regr)
+```
+В данном случае модель также получилась невырожденной из-за маленького p-value, соответствующего значению F-статистики. Однако ввиду того, что значение R^2 получилось меньше, чем 0.5, можно констатировать что качество модели получилось низким.
+
+Посмотрим на график остатков:
+```{r}
+plot(y=rstudent(regr),x=as.vector(time(test_data$Date[2:n])),xlab="Date",ylab="Standardized Residuals",type = "o", col = "blue",lwd=3)
+```
+В начале имеются явные выбросы, что ставит под сомнение нормальное распределение остатков. Посмотрим явно на гистограмму, график квантилей и результат теста Шапиро-Уилка:
+```{r}
+hist(rstudent(regr),xlab='Standardized Residuals', col = "blue")
+```
+
+```{r}
+qqnorm(rstudent(regr),col="blue")
+```
+
+```{r}
+shapiro.test(rstudent(regr))
+```
+Гистограмма и график квантилей выглядят не характерно для нормального распределения. Статистика Шапиро-Уилка соответствует маленькому p-value, а так как основная гипотеза это нормальное распределение остатков, то мы её отвергаем.
+
+Также дополнительно посмотрим на коррелированность остатков:
+```{r}
+acf(rstudent(regr))
+```
+Видим очень большую корреляцию. По всем признакам полученная модель получилась неудачной.

@@ -1,0 +1,79 @@
+---
+title: "Test 7, вариант 11. Черкасов Владислав, группа 520"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+origin <- na.omit(read.csv("data_11.txt", sep = "\t", header = TRUE))
+```
+Загружаем данные, переходя к ряду из приростов цен. Его стационарность проверим тестом Дики-Фуллера:
+
+
+```{r}
+data <- origin[-1,]
+data$Price <- diff(origin$Price)
+data$Date <- origin$Date[-1]
+library(stats)
+data <- ts(data[,2], start = c(1994,1), frequency = 52)
+new_data <- window(data, start = c(2009,25), end = c(2014,36))
+library(tseries)
+tseries::adf.test(new_data, k=52)
+plot(new_data ,type = "l", col = "blue",lwd = 2,main = "Weekly difference U.S. Gasoline Prices (Dollars per Gallon)")
+```
+
+Ранее было установлено, что с этими данными лучше всего использовать модель (1,0,1) с периодичностью 52 и отстутсвием сезонных компонент. Построим прогноз с помощью функции nnetar:
+```{r}
+p <- 1
+q <- 1
+future <- window(data,start = c(2014,37), end = c(2014,48))
+library(forecast)
+nnet<- nnetar(new_data, p = p, q = q, size = 10)
+fcast <- forecast(nnet,h = 12)
+plot(fcast)
+```
+
+Построим прогноз с помощью prophet:
+```{r}
+library(prophet)
+library(dplyr)
+mydata <- na.omit(read.csv('./data_11.txt', sep = '\t', header = TRUE))
+colnames(mydata)<- c('ds','y')
+prophet_data <- as.data.frame(mydata)
+
+prophet_data[,1] <- as.Date(prophet_data[,1],"%d.%m.%Y")
+```
+
+```{r}
+prophet_past <- prophet_data[1:length(prophet_data)-12]
+prophet_for <- prophet(prophet_past)
+future_oil <- make_future_dataframe(prophet_for, periods = 12, freq = "week")
+forecast_oil <- predict(prophet_for, future_oil)
+plot(prophet_for, forecast_oil)
+```
+
+Проведём кросс-валидацию для prophet-модели:
+```{r}
+prophet_cv <- cross_validation(prophet_for, initial = round(length(prophet_data[,2])*0.5),
+                               period = 50, horizon = 12, units = "weeks")
+plot_cross_validation_metric(prophet_cv,
+                    metric = "mape",
+                    rolling_window = 0.1) 
+```
+
+На этом графике приведены оценки метрики MAPE для каждой из дат прогнозного горизонта каждого из блоков данных, участвовавших в перекрестной проверке. Голубая линия соответствует усредненным значениям в пределах каждого скользящего окна. Судя по большому разбросу полученных оценок MAPE, качество модели, полученной с помощью prophet, желает оставлять лучшего, в том плане, что её прогнозы "не устойчивые". Хотя отклонения в процентах получились совсем небольшие.
+
+Изобразим полученные прогнозы на одном графике, чтобы визуально сравнить качество обоих прогнозов. Поскольку nnet прогнозировала разности, а prophet -- исходный ряд, то в прогнозах prophet перейдём к разностям:
+
+```{r}
+prophet_fcast <- ts(forecast_oil$yhat, start = c(1994,1), frequency = 52)
+prophet_pred <- diff(window(prophet_fcast,start = c(2014,36), end = c(2014,48)))
+res <- cbind(tail(new_data,n=40),future,fcast$mean,prophet_pred)
+ds <- seq(as.Date("2013/12/21"), by = 'week', length.out = 52)
+matplot(ds, res ,type = c("l","l","l","l"),pch = 20, col = c("blue","red","green","magenta"),lty = 1,lwd = 1,main = "NNet Forecast and Prophet Forecast")
+legend("topleft",c("Past","Future","NNet predict","Prophet predict"),col = c("blue","red","green","magenta"), fill = c("blue","red","green","magenta"))
+
+```
+
+К реальным данным оказалась ближе prophet-модель.

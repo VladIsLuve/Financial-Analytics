@@ -1,0 +1,285 @@
+---
+title: "Test 6, вариант 11. Черкасов Владислав, группа 520"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+origin <- na.omit(read.csv("data_11.txt", sep = "\t", header = TRUE))
+```
+Загружаем данные, переходя к ряду из приростов цен. Его стационарность проверим тестом Дики-Фуллера:
+
+
+```{r}
+data <- origin[-1,]
+data$Price <- diff(origin$Price)
+data$Date <- origin$Date[-1]
+library(stats)
+data <- ts(data[,2], start = c(1994,1), frequency = 52)
+new_data <- window(data, start = c(2009,25), end = c(2014,36))
+library(tseries)
+tseries::adf.test(new_data, k=52)
+plot(new_data ,type = "l", col = "blue",lwd = 2,main = "Weekly difference U.S. Gasoline Prices (Dollars per Gallon)")
+```
+
+Итак, полученный ряд можно считать стационарным в плане среднего значения. Пришлось немного отступить от исходных временных границ, чтобы добиться честной стационарности с точки зрения статистического теста, поскольку исходный промежуток времени был неидеален:
+```{r}
+tseries::adf.test(window(data, start = c(2010,1), end = c(2015,1)), k=52)
+```
+
+Построим графики ACF и PACF:
+```{r}
+acf(new_data, lwd = 2,main = "ACF",col = "blue",lag.max = 105)
+pacf(new_data,lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+
+График ACF обладает очень низкой скоростью затухания и большим количеством выбросов, поэтому требуется ориентироваться на график PACF, следовательно, будем считать, что данный временной ряд лучше описывать с помощью модели авторегрессии. Основываясь на этом графике, можно оценить порядок модели, как (1,0,0) с периодом сезонности 52, поскольку в году 52 недели. Проявления годовой сезонности не наблюдается, поэтому оставим сезонную компоненту нулевой. Для сравнения используем модель, которую предлагает функция автоматического подбора модели:
+```{r}
+library(forecast)
+auto.arima(new_data)
+```
+Оценим эти модели:
+```{r}
+library("lmtest")
+arima_model <- arima(new_data,order = c(1,0,0),seasonal = list(order= c(0,0,0),period = 52),method = "ML")
+coeftest(arima_model)
+```
+```{r}
+AIC(arima_model)
+resid <- arima_model$residuals
+Box.test(resid, lag = 52, type = "Ljung-Box", fitdf = 2)
+qqnorm(resid)
+qqline(resid)
+shapiro.test(resid)
+
+
+acf(resid, lwd = 2,main = "ACF",col = "blue",lag.max=105)
+pacf(resid, lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+Остатки не похожи на нормально распределённые, как минимум, правый хвост довольно тяжёлый, автокорреляций в остатках не наблюдается. Сравним с другой моделью:
+```{r}
+arima_model <- arima(new_data,order = c(1,0,1),seasonal = list(order= c(0,0,1),period = 52),method = "ML")
+coeftest(arima_model)
+```
+
+```{r}
+AIC(arima_model)
+resid <- arima_model$residuals
+Box.test(resid, lag = 52, type = "Ljung-Box", fitdf = 2)
+qqnorm(resid)
+qqline(resid)
+shapiro.test(resid)
+
+acf(resid, lwd = 2,main = "ACF",col = "blue",lag.max=105)
+pacf(resid, lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+
+Во обоих случаях p-value в тесте Льюнг-Бокса для остатков оказался больше 0.05, следовательно, мы можем не отвергать гипотезу о некоррелированности остатков. Также в обоих случаях p-value, соответсвующий значению критерия Шапиро-Уилка для остатков получилось меньше 0.05, поэтому мы отвергаем нулевую гипотезу о нормальном распределении остатков. Хоть обе модели оказались далёкими от идеала, вторая выглядит лучше, поскольку критерий Акаике для неё оказался меньше, а p-value, соответствующий тестам Льюинга-Бокса и Шапиро-Уилка её остатков, оказались больше, чем у первой. Также вторая модель имеет больше значимых компонент. Однако смущает незначимость сезонной компоненты. Рассмотрим модель без неё:
+```{r}
+arima_model <- arima(new_data,order = c(1,0,1),seasonal = list(order= c(0,0,0),period = 52),method = "ML")
+coeftest(arima_model)
+```
+
+```{r}
+AIC(arima_model)
+resid <- arima_model$residuals
+Box.test(resid, lag = 52, type = "Ljung-Box", fitdf = 2)
+qqnorm(resid)
+qqline(resid)
+shapiro.test(resid)
+
+acf(resid, lwd = 2,main = "ACF",col = "blue",lag.max=105)
+pacf(resid, lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+Отличий практически нет, но зато неинформативной компоненты в модели больше нет, поэтому воспользуемся ею в дальнейшем. Оценим применимость GARCH-модели с помощью теста Энгла:
+
+```{r}
+library(aTSA)
+arch.test(arima_model)
+```
+Первый тест отвергает гипотезу о белом шуме на всех задержках. Второй тест не отвергает гипотезы о белом шуме на всех задержках, начиная с 20. Следовательно, GARCH моделЬ применима.
+
+```{r}
+library(rugarch)
+spec <- ugarchspec(variance.model = list(model ="sGARCH",garchOrder = c(1,1)), mean.model = list(armaOrder = c(1, 1)),distribution.model = "std")
+fit <- ugarchfit(data = new_data, spec = spec)
+resid <- fit@fit$residuals
+matplot(resid,type = "l",lwd = 3,col = "blue",main = "Residuals")
+qqnorm(resid ,lwd=3,col = "blue")
+shapiro.test(resid)
+infocriteria(fit)
+```
+Методом проб и ошибок определели, что наименьший критерий Акаике получается при указании порядка GARCH модели 1,1. Составим по ней прогноз:
+```{r}
+library(fGarch)
+z<- new_data
+zz<-window(data,start = c(2014,36), end = c(2014,48))
+
+getVector <- function(vv,bInd,l)
+{
+c <- vector()
+if (bInd > 1)
+{
+c <- rep(NA,bInd-1)
+}
+res <- c(c,vv)
+cc <- vector()
+cc <- rep(NA,l-length(res))
+res <- c(res,cc)
+return(res)
+
+}
+ldf <- length(z)
+nforec <- 12
+ll <- ldf + nforec
+forec<-ugarchforecast(fit,n.ahead = nforec)
+
+vec1 <- getVector(zz,ldf,ll)
+vec2 <- getVector(forec@forecast$seriesFor,ldf+1,ll)
+vec3 <- getVector(z,1,ll)
+q<- qnorm(0.95)
+dPl <- forec@forecast$seriesFor + forec@forecast$sigmaFor*q
+dMn <- forec@forecast$seriesFor - forec@forecast$sigmaFor*q
+vec4 <- getVector(dPl,ldf+1,ll)
+vec5 <- getVector(dMn,ldf+1,ll)
+res <- cbind(vec1,vec2,vec3,vec4,vec5)
+matplot(res , type = c("b","b","b","b","b"),pch = 16,lty=1, lwd= c(2,3,2,1,1),ylab = "Values",xlab="Time",col = c("green","blue","magenta","black","black"), xlim = c(ll*0.8,ll))
+abline(h=coef(arima_model)[names(coef(arima_model))=='intercept'])
+legend("topright",c("Future Values","Forecasts","Time series","Conf.Level"),bty="n",lwd = 2,col = c("green","blue","magenta","black"))
+
+```
+
+Рассмотрим дополнительный датасет:
+```{r}
+library(tseries)
+#variant <- diff(ts(na.omit(read.csv("variant.csv", sep = ",", header = TRUE))[2]))
+variant <- ts(na.omit(read.csv("variant.csv", sep = ",", header = TRUE))[2])
+#variant <- variant[2:length(variant)] / variant[1:length(variant)-1]-1
+plot(variant ,type = "l", col = "blue",lwd = 2,main = "Variant")
+adf.test(variant)
+```
+Судя по полученным p-value, рассматриваемый ряд стационарный. Построим графики ACF и PACF, чтобы определить порядок ARMA модели:
+```{r}
+acf(variant, lwd = 2,main = "ACF",col = "blue",lag.max = 105)
+pacf(variant,lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+На всякий случай, для надёжности минимизации по Акаике, воспользуемся автоматическим подбором модели: 
+```{r}
+auto.arima(variant)
+```
+
+```{r}
+new_arima_model <- arima(variant,order = c(3,0,2),seasonal = list(order= c(0,0,0),period = 52),method = "ML")
+coeftest(new_arima_model)
+```
+
+```{r}
+AIC(new_arima_model)
+resid <- new_arima_model$residuals
+Box.test(resid, lag = 52, type = "Ljung-Box", fitdf = 5)
+qqnorm(resid)
+qqline(resid)
+shapiro.test(resid)
+
+acf(resid, lwd = 2,main = "ACF",col = "blue",lag.max=105)
+pacf(resid, lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+
+```{r}
+arch.test(new_arima_model)
+```
+Первый тест отвергает гипотезу о белом шуме, второй отвергает на всех задержках, кроме 24. Можно считать, что гетероскедастичность применима. Ниже произведён подбор порядков ARIMA-sGARCH модели с минимальным значением критерия Акаике:
+```{r}
+spec <- ugarchspec(variance.model = list(model ="sGARCH",garchOrder = c(2,1)), mean.model = list(armaOrder = c(3, 2)),distribution.model = "std")
+fit <- ugarchfit(data = variant, spec = spec)
+resid <- fit@fit$residuals
+matplot(resid,type = "l",lwd = 3,col = "blue",main = "Residuals")
+qqnorm(resid ,lwd=3,col = "blue")
+shapiro.test(resid)
+infocriteria(fit)
+```
+Остатки не распределены нормально, что говорит о плохой подгонке модели. Попробуем продифференцировать ряд, а также рассмотреть относительные приросты:
+```{r}
+variant <- diff(ts(na.omit(read.csv("variant.csv", sep = ",", header = TRUE))[2]))
+plot(variant ,type = "l", col = "blue",lwd = 2,main = "Variant")
+adf.test(variant)
+```
+Судя по полученным p-value, ряд из разностей стационарный. Построим графики ACF и PACF, чтобы определить порядок ARMA модели:
+```{r}
+acf(variant, lwd = 2,main = "ACF",col = "blue",lag.max = 105)
+pacf(variant,lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+Снова воспользуемся автоматическим подбором модели: 
+```{r}
+auto.arima(variant)
+```
+На графике явно видно, что порядок модели больше, чем предлагает функция автоматического подбора, поэтому выберем модель порядка (0,0,2) без сезонной компоненты.
+```{r}
+new_arima_model <- arima(variant,order = c(0,0,2),seasonal = list(order= c(0,0,0),period = 52),method = "ML")
+coeftest(new_arima_model)
+```
+Как видим, не зря. Компонента второго порядка оказалась значимой.
+```{r}
+AIC(new_arima_model)
+resid <- new_arima_model$residuals
+Box.test(resid, lag = 52, type = "Ljung-Box", fitdf = 2)
+qqnorm(resid)
+qqline(resid)
+shapiro.test(resid)
+
+acf(resid, lwd = 2,main = "ACF",col = "blue",lag.max=105)
+pacf(resid, lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+
+```{r}
+arch.test(new_arima_model)
+```
+Первый тест отвергает гипотезу о белом шуме, второй отвергает на всех задержках, кроме 24. Можно считать, что гетероскедастичность применима. Ниже произведён подбор порядков ARIMA-sGARCH модели с минимальным значением критерия Акаике на ряду из разностей:
+```{r}
+spec <- ugarchspec(variance.model = list(model ="sGARCH",garchOrder = c(2,1)), mean.model = list(armaOrder = c(0, 2)),distribution.model = "std")
+fit <- ugarchfit(data = variant, spec = spec)
+resid <- fit@fit$residuals
+matplot(resid,type = "l",lwd = 3,col = "blue",main = "Residuals")
+qqnorm(resid ,lwd=3,col = "blue")
+shapiro.test(resid)
+infocriteria(fit)
+```
+как видим, лучше не стало ни по Акаике, ни по распределению остатков. Рассмотрим отношения:
+```{r}
+variant <- ts(na.omit(read.csv("variant.csv", sep = ",", header = TRUE))[2])
+variant <- variant[2:length(variant)] / variant[1:length(variant)-1]-1
+plot(variant ,type = "l", col = "blue",lwd = 2,main = "Variant")
+adf.test(variant)
+```
+Судя по полученным p-value, ряд из разностей стационарный. Построим графики ACF и PACF, чтобы определить порядок ARMA модели:
+```{r}
+acf(variant, lwd = 2,main = "ACF",col = "blue",lag.max = 105)
+pacf(variant,lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+На всякий случай, для надёжности минимизации по Акаике, воспользуемся автоматическим подбором модели: 
+```{r}
+auto.arima(variant)
+```
+
+```{r}
+new_arima_model <- arima(variant,order = c(0,0,0),seasonal = list(order= c(0,0,0),period = 52),method = "ML")
+coeftest(new_arima_model)
+```
+
+```{r}
+AIC(new_arima_model)
+resid <- new_arima_model$residuals
+Box.test(resid, lag = 52, type = "Ljung-Box", fitdf = 0)
+qqnorm(resid)
+qqline(resid)
+shapiro.test(resid)
+
+acf(resid, lwd = 2,main = "ACF",col = "blue",lag.max=105)
+pacf(resid, lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+
+```{r}
+arch.test(new_arima_model)
+```
+Первый тест не отвергает гипотезу о белом шуме на всех задержках вплоть до 24. Поэтому нельзя считать, что модель с гетероскедастичностью применима. Таким образом, наилучшей оказалась модель (2,1)(3,2) при рассмотрении исходного ряда со значением критерия Акаике 6.183031.

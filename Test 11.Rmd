@@ -1,0 +1,176 @@
+---
+title: "Test 11, вариант 9. Черкасов Владислав, группа 520"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+data <- read.table('var9.csv',sep='\t',header = TRUE)
+matplot(data,type = "l",lty = 1,main = "CAC40")  
+```
+
+Падение произошло не резко, значит интервенция типа ступенька.
+```{r}
+inter.sim <- function(n,u,ar,ma,iT,isPulse)
+{
+  p <- length(ar)
+  q <- length(ma)
+  vec <-1:n
+  if (isPulse)
+    interven=1*(seq(vec)==iT)
+  else
+    interven=1*(seq(vec)>=iT)
+  
+  inter <-stats::filter(interven,filter=ar,
+                        method='recursive', side=1)*  ma[1]
+  for (i in 2:q)
+  {  
+    if (isPulse)
+      interven.i <- 1*(seq(vec)==(iT+i-1))
+    else
+      interven.i <- 1*(seq(vec)>=(iT+i-1))
+    
+    inter.i <-stats::filter(interven.i,filter=ar,
+                            method='recursive', side=1)*  ma[i]
+    inter <- inter+inter.i
+  }    
+  return (inter+u*interven)
+}
+
+fn <- function(param,x,pp,qq,int.time,isPulse)
+{
+  nParam<- length(param)
+  u0 <- param[1]
+  ar <- param[2:(pp+1)]
+  ma <- param[(2+pp):nParam]
+  n <- length(x)
+  m <- mean(x[1:(int.time-1)])
+  interven <- inter.sim(n,u0,ar,ma,int.time,isPulse )+m
+  res <-sum((x - interven)^2)
+  return (res)
+}
+
+estimate.interven<- function(x,transfer,int.time,isPulse)
+{
+  pp<- transfer[1]
+  qq<- transfer[2]
+  t.order <- pp+qq+2
+  param <- rep(0.2,t.order)
+  res <- optim(param,fn,gr=NULL,x=x,pp = pp,qq ==qq,int.time= int.time, isPulse=isPulse, method="BFGS")
+  listres <- list(rss=res$value,u = res$par[1], ar = res$par[2:(pp+1)],ma   =res$par[(2+pp):t.order])
+  return (listres)
+}
+```
+
+```{r}
+library(TSA)
+n <- dim(data)[1]
+data[,1] <- as.Date(data[,1], "%d.%m.%y")
+startdate<-'2020-01-02'
+enddate<-'2020-07-02'
+n.start<- which(data[,1]==startdate)
+n.end<- which(data[,1]==enddate)
+nn<-n.end-n.start+1  
+int.data <- data[n.start:n.end,]
+Intervention.Time <- as.Date("2020-02-24")
+(iT <- which(int.data[,1]==Intervention.Time ))
+isPulse<-FALSE
+for (p in 1:3)
+  for (q in 1:5)
+  {
+     res<-estimate.interven(data[,2],c(p,q),iT,isPulse)
+     print(c(p,q))
+     print(res)
+  }  
+```
+
+Лучшей оказалась модель (3,3). Проверим модель на стационарность.
+```{r}
+ar <- c(0.9296149, 0.9215353, -0.8616992)
+ma <- c(493.7897, -592.8118, -605.4657,  695.8869)
+u0 <- -406.4435
+
+AR.polynom <- c(1,-ar)
+root<-polyroot(AR.polynom) # solve the polynomial equation
+(rmin <-min(abs(root)))
+```
+
+Получили число, большее 1, следовательно, можем двигаться дальше.
+```{r}
+intervention.level <- mean(int.data[as.integer(iT/2):(iT-1),2])
+interven <- inter.sim(nn,u0,ar,ma,iT,isPulse)
+plot(int.data[,2],type= 'b',pch=20,ylab='',col= "blue",lwd =2,main = "Data and fitted model")
+points(interven+intervention.level,pch = 21,col= "red",lwd =2)
+legend("topleft",c("initial data","fitted intervention"),pch = 21,col = c("blue","red"),lwd =2)
+
+```
+
+Данные без интервенции:
+```{r}
+interven.deleted<-int.data[,2] - interven
+matplot(interven.deleted,type = "b",pch = 21,col="blue",main = "Intervention deleted")
+```
+
+Спрогнозируем модель без интервенции:
+```{r}
+library(bsts)
+ss <- AddLocalLinearTrend(list(), data[,2])
+ss <- AddSeasonal(ss, data[,2], nseasons = 7)
+model1 <- bsts(data[,2],
+               state.specification = ss,
+               niter = 1000)
+plot(model1, "components") 
+```
+
+```{r}
+pred1 <- predict(model1, horizon = 10)
+plot(pred1, plot.original = 140)
+```
+
+Добавим прогноз с учётом интервенции:
+```{r}
+horizon <- 10
+plot.original <- 140
+original.series <- pred1$original.series
+inter.horizon <-plot.original+horizon 
+original.series <- tail(original.series, plot.original)
+original.date   <- tail(data[,1], plot.original)
+int.time <- which(original.date==Intervention.Time )
+intr<-inter.sim(inter.horizon,u0,ar,ma,int.time,isPulse= F)
+original.series <- original.series+head(intr,plot.original)
+n1 <- ncol(pred1$distribution)
+intr.forecast <- tail(intr,horizon)
+for (i in 1:n1)
+   pred1$distribution[,i]<- pred1$distribution[,i]+intr.forecast[i]
+interval.quantiles <- c(0.05,0.95)
+pred1$interval <- apply(pred1$distribution, 2, 
+                             quantile, interval.quantiles)
+
+ylim <- range(pred1$distribution, original.series, 
+              na.rm = TRUE)
+
+time <- index(original.series)
+deltat <- tail(diff(tail(time, 2)), 1)
+pred.time <- tail(time, 1) + (1:n1) * deltat
+median.color <- "blue"
+median.type <- 1
+median.width <- 3                        
+interval.type <- 3
+interval.width <- 3
+interval.color <- 'green'
+median <- pred1$median + intr.forecast
+
+plot(time, original.series, type = "l",main='САС40 forecasts', xlim = range(time, 
+                        pred.time, na.rm = TRUE), ylim = ylim)
+PlotDynamicDistribution(curves = pred1$distribution, 
+                        timestamps = pred.time, add =  plot.original, ylim = ylim)
+
+lines(pred.time, median, col = median.color, 
+      lty = median.type, lwd = median.width)
+for (i in 1:nrow(pred1$interval)) {
+  lines(pred.time,  pred1$interval[i, ], col = interval.color, 
+        lty = interval.type, lwd = interval.width)
+}
+
+```

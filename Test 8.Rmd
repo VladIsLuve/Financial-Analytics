@@ -1,0 +1,88 @@
+---
+title: "Test 8, вариант 11. Черкасов Владислав, группа 520"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+origin <- na.omit(read.csv("data_11.txt", sep = "\t", header = TRUE))
+```
+Загружаем данные, переходя к ряду из приростов цен:
+
+
+```{r}
+library(xts)
+data <- origin[-1,]
+ncol <- dim(data)[2]
+nrow  <- dim(data)[1]
+data$Price <- diff(origin$Price)
+data$Date <- origin$Date[-1]
+dates <- as.Date(data[,1], "%d.%m.%Y")
+data$Price <- data$Price / max(data$Price)
+dummy <- rnorm(nrow)
+data <- cbind(data$Price, dummy, 0.5+data$Price+rnorm(nrow))
+data.xts <- as.xts(data, order.by = dates)
+data.xts <- as.data.frame(data.xts)
+col.names <- colnames(data.xts)
+col.names[1]<- "y"
+col.names[2]<-"dummy"
+col.names[3]<-"z"
+colnames(data.xts) <-col.names 
+plot(data.xts$y ,type = "l", col = "blue",lwd = 2,main = "Weekly difference U.S. Gasoline Prices (Dollars per Gallon)")
+```
+
+Построим прогноз с помощью модели bsts:
+
+```{r}
+library(bsts)
+ss <- AddLocalLinearTrend(list(), data.xts$y)
+ss <- AddSeasonal(ss, data.xts$y, nseasons = 52)
+model.no.regressors <- bsts(data.xts$y,
+               state.specification = ss,
+               niter = 1000)
+```
+
+```{r}
+pred1 <- predict(model.no.regressors, horizon = 12)
+plot(pred1, plot.original = 200)
+```
+
+Построим модель с двумя предикторами и оценим её, ожидая увидеть только один предиктор:
+```{r}
+model.default.expected.model.size<- bsts(data.xts$z ~ data.xts$dummy + data.xts$y,
+               state.specification = ss,
+               niter = 1000,
+               expected.model.size = 1,seed = 1000)
+```
+```{r}
+summary(model.default.expected.model.size)
+plot(model.default.expected.model.size, "coef")
+```
+
+Проделаем аналогичную процедуру, ожидая увидеть 2 предиктора:
+```{r}
+model2.expected.model.size<- bsts(z ~ .,
+               state.specification = ss,
+               niter = 1000,
+               expected.model.size = 2,
+               data = data.xts,
+               seed = 1000)
+```
+```{r}
+summary(model2.expected.model.size)
+plot(model2.expected.model.size, "coef")
+```
+
+Выведем важность предикторов в каждый момент времени:
+```{r}
+plot(model2.expected.model.size, "predictors")
+legend("topright", legend = c("y", "dummy"),
+       lwd = 3, col = c("black", "blue"))
+```
+```{r}
+
+```
+```{r}
+
+```

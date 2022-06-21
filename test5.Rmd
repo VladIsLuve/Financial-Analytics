@@ -1,0 +1,121 @@
+---
+title: "Test 5, вариант 11. Черкасов Владислав, группа 520"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r}
+origin <- na.omit(read.csv("data_11.txt", sep = "\t", header = TRUE))
+```
+Загружаем данные, переходя к ряду из приростов цен. Его стационарность проверим тестом Дики-Фуллера:
+
+
+```{r}
+data <- origin[-1,]
+data$Price <- diff(origin$Price)
+data$Date <- origin$Date[-1]
+library(stats)
+data <- ts(data[,2], start = c(1994,1), frequency = 52)
+new_data <- window(data, start = c(2009,25), end = c(2014,36))
+library(tseries)
+adf.test(new_data, k=52)
+plot(new_data ,type = "l", col = "blue",lwd = 2,main = "Weekly difference U.S. Gasoline Prices (Dollars per Gallon)")
+```
+
+Итак, полученный ряд можно считать стационарным в плане среднего значения. Пришлось немного отступить от исходных временных границ, чтобы добиться честной стационарности с точки зрения статистического теста, поскольку исходный промежуток времени был неидеален:
+```{r}
+adf.test(window(data, start = c(2010,1), end = c(2015,1)), k=52)
+```
+
+Построим графики ACF и PACF:
+```{r}
+acf(new_data, lwd = 2,main = "ACF",col = "blue",lag.max = 105)
+pacf(new_data,lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+
+График ACF обладает очень низкой скоростью затухания и большим количеством выбросов, поэтому требуется ориентироваться на график PACF, следовательно, будем считать, что данный временной ряд лучше описывать с помощью модели авторегрессии. Основываясь на этом графике, можно оценить порядок модели, как (1,0,0) с периодом сезонности 52, поскольку в году 52 недели. Проявления годовой сезонности не наблюдается, поэтому оставим сезонную компоненту нулевой. Для сравнения используем модель, которую предлагает функция автоматического подбора модели:
+```{r}
+library(forecast)
+auto.arima(new_data)
+```
+Оценим эти модели:
+```{r}
+library("lmtest")
+arima_model <- arima(new_data,order = c(1,0,0),seasonal = list(order= c(0,0,0),period = 52),method = "ML")
+coeftest(arima_model)
+```
+```{r}
+AIC(arima_model)
+resid <- arima_model$residuals
+Box.test(resid, lag = 52, type = "Ljung-Box", fitdf = 2)
+qqnorm(resid)
+qqline(resid)
+shapiro.test(resid)
+
+
+acf(resid, lwd = 2,main = "ACF",col = "blue",lag.max=105)
+pacf(resid, lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+Остатки не похожи на нормально распределённые, как минимум, правый хвост довольно тяжёлый, автокорреляций в остатках не наблюдается. Сравним с другой моделью:
+```{r}
+arima_model <- arima(new_data,order = c(1,0,1),seasonal = list(order= c(0,0,1),period = 52),method = "ML")
+coeftest(arima_model)
+```
+
+```{r}
+AIC(arima_model)
+resid <- arima_model$residuals
+Box.test(resid, lag = 52, type = "Ljung-Box", fitdf = 2)
+qqnorm(resid)
+qqline(resid)
+shapiro.test(resid)
+
+acf(resid, lwd = 2,main = "ACF",col = "blue",lag.max=105)
+pacf(resid, lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+
+Во обоих случаях p-value в тесте Льюнг-Бокса для остатков оказался больше 0.05, следовательно, мы можем не отвергать гипотезу о некоррелированности остатков. Также в обоих случаях p-value, соответсвующий значению критерия Шапиро-Уилка для остатков получилось меньше 0.05, поэтому мы отвергаем нулевую гипотезу о нормальном распределении остатков. Хоть обе модели оказались далёкими от идеала, вторая выглядит лучше, поскольку критерий Акаике для неё оказался меньше, а p-value, соответствующий тестам Льюинга-Бокса и Шапиро-Уилка её остатков, оказались больше, чем у первой. Также вторая модель имеет больше значимых компонент. Однако смущает незначимость сезонной компоненты. Рассмотрим модель без неё:
+```{r}
+arima_model <- arima(new_data,order = c(1,0,1),seasonal = list(order= c(0,0,0),period = 52),method = "ML")
+coeftest(arima_model)
+```
+
+```{r}
+AIC(arima_model)
+resid <- arima_model$residuals
+Box.test(resid, lag = 52, type = "Ljung-Box", fitdf = 2)
+qqnorm(resid)
+qqline(resid)
+shapiro.test(resid)
+
+acf(resid, lwd = 2,main = "ACF",col = "blue",lag.max=105)
+pacf(resid, lwd = 2,main = "PACF",col = "blue",lag.max=105)
+```
+Отличий практически нет, но зато неинформативной компоненты в модели больше нет, поэтому воспользуемся ею в дальнейшем. Построим оценки для спектральных плотностей:
+```{r}
+spectrum(new_data)
+spectrum(arima_model$residuals)
+```
+
+Построим прогнозы c доверительными интервалами уровня 0.95:
+```{r}
+library(forecast)
+past <- new_data
+future <- window(data,start = c(2014,36), end = c(2014,48))
+plot(forecast(arima_model,h=12), xlim = c(2013.5, 2014.85))
+par(new = TRUE)
+lines(future, col = "red")
+```
+
+```{r}
+alpha <- 0.2
+model <- HoltWinters(past,alpha = alpha,beta = FALSE, gamma= FALSE)
+filter(alpha*past,filter = 1-alpha,method = "recursive",init = past[1])
+
+plot(forecast(model,h=12), xlim = c(2013.5, 2014.85))
+par(new = TRUE)
+lines(future, col = "red")
+```
+
+Хотя прогнозы и получились не самыми точными, ввиду не самых подходящих моделей, реальные значения почти всегда лежат внутри доверительного интервала предсказанных значений. 
